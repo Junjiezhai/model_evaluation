@@ -1,0 +1,240 @@
+# ============================================================
+# 信贷客服会话状态转移矩阵（程序化定义）
+#
+# 派生自 base_knowledge/session_state_transition.md（人读规范），
+# 由 eval/metrics/state_validator.py 加载消费。
+# 注意：修改本文件时请同步检查 session_state_transition.md，
+# 两边以本 YAML 为程序化消费的唯一来源。
+#
+# 三层规则：
+#   1. P0 全局规则（global_transitions）— 任意状态下触发，优先级最高
+#   2. 主流程规则（main_transitions）  — 特定状态下的业务流转
+#   3. 兜底规则                      — 无匹配时视为漂移
+# ============================================================
+
+# ----------------------------------------------------------
+# P0 全局转移规则（任意状态均可触发）
+# ----------------------------------------------------------
+global_transitions:
+  用户主动要求转人工: RG_BZSQ
+  用户情绪升级: RG_QX_SJ
+  违规操作: FX_WGCZ
+  内部信息探知: FX_NBXX
+  合规边界: FX_HGBJ
+  模型反问澄清: MH_FWCL
+  用户输入模糊: INIT
+  非业务相关: INIT
+
+# P0 全局意图的关键词匹配（用于从意图文本中自动识别）
+global_intent_keywords:
+  用户主动要求转人工: [转人工, 人工客服, 转接人工, 人工服务, 帮我转]
+  用户情绪升级: [投诉, 举报, 差评, 什么服务, 叫你们经理, 太慢, 不耐烦]
+  违规操作: [套现, 伪造, 虚假, 骗贷]
+  内部信息探知: [风控系统, 内部数据, 审核规则, 算法, 模型参数]
+  合规边界: [未成年人, 未满18, 学生借款, 无收入]
+  模型反问澄清: [反问, 澄清, 您是指, 能具体说]
+  用户输入模糊: [模糊, 不清楚, 不知道, 嗯, 哦]
+  非业务相关: [闲聊, 天气, 笑话, 新闻, 你好吗]
+
+# ----------------------------------------------------------
+# 主流程转移规则（特定状态 → 意图 → 下一状态）
+# ----------------------------------------------------------
+main_transitions:
+  # INIT 初始状态
+  INIT:
+    提额业务咨询: TL_YWZX
+    降息业务咨询: JX_YWZX
+    借款操作咨询: JK_CQZX
+    借款条件咨询: JK_TJZX
+    额度查询: ZX_EDCX
+    定价查询: ZX_DJCX
+    账单查询: ZX_ZDCX
+    其他咨询: ZX_QTZX
+    提额+降息复合: FH_TLJX
+    提额+下单复合: FH_TLXD
+
+  # 提额主流程（TL_*）
+  TL_YWZX:
+    提额准入条件咨询: TL_ZRTJ
+    提额操作咨询: TL_CQZX    # 跳过准入直接问操作（lenient 模式下合法）
+  TL_ZRTJ:
+    提额操作咨询: TL_CQZX
+    提额业务咨询: TL_YWZX    # 回退了解业务概念
+  TL_CQZX:
+    提额材料咨询: TL_CLZX
+    提额定制诉求: TL_DZSX
+    提额进度咨询: TL_JDZX    # 跳过材料直接问进度
+    提额业务咨询: TL_YWZX    # 回退
+    提额准入条件咨询: TL_ZRTJ # 回退
+  TL_DZSX:
+    提额材料咨询: TL_CLZX
+    提额操作咨询: TL_CQZX
+  TL_CLZX:
+    提额进度咨询: TL_JDZX
+    提额操作咨询: TL_CQZX
+  TL_JDZX:
+    提额结果咨询: TL_JGZX
+    提额操作咨询: TL_CQZX
+  TL_JGZX:
+    提额结果咨询: TL_JG
+    提额操作咨询: TL_CQZX
+  TL_JG:
+    借款操作咨询: JK_CQZX    # 审核通过 → 引导借款
+    借款条件咨询: JK_TJZX
+    提额操作咨询: TL_CQZX    # 审核失败 → 重新申请
+    额度查询: ZX_EDCX
+
+  # 降息主流程（JX_*）
+  JX_YWZX:
+    降息准入条件咨询: JX_ZRTJ
+    降息操作咨询: JX_CQZX
+  JX_ZRTJ:
+    降息操作咨询: JX_CQZX
+    降息业务咨询: JX_YWZX
+  JX_CQZX:
+    降息进度咨询: JX_JDZX
+    降息业务咨询: JX_YWZX
+    降息准入条件咨询: JX_ZRTJ
+  JX_JDZX:
+    降息结果咨询: JX_JGZX
+    降息操作咨询: JX_CQZX
+  JX_JGZX:
+    降息结果咨询: JX_JG
+    降息操作咨询: JX_CQZX
+  JX_JG:
+    借款操作咨询: JK_CQZX    # 降息成功 → 引导借款
+    借款条件咨询: JK_TJZX
+    提额操作咨询: TL_CQZX    # 降息失败 → 引导提额
+    降息操作咨询: JX_CQZX
+
+  # 借款主流程（JK_*）
+  JK_CQZX:
+    借款条件咨询: JK_TJZX
+    提额操作咨询: TL_CQZX    # 额度不足 → 引导提额
+    额度查询: ZX_EDCX
+  JK_TJZX:
+    借款操作咨询: JK_CQZX
+    提额操作咨询: TL_CQZX    # 额度不足 → 引导提额
+    额度查询: ZX_EDCX
+
+  # 信息咨询（ZX_*）
+  ZX_EDCX:
+    提额操作咨询: TL_CQZX    # 主动引导提额
+    降息操作咨询: JX_CQZX    # 主动引导降息
+    借款操作咨询: JK_CQZX    # 引导借款
+    借款条件咨询: JK_TJZX
+    定价查询: ZX_DJCX
+    账单查询: ZX_ZDCX
+    额度查询: ZX_EDCX
+  ZX_DJCX:
+    降息操作咨询: JX_CQZX    # 主动引导降息
+    借款操作咨询: JK_CQZX    # 引导借款
+    借款条件咨询: JK_TJZX
+    额度查询: ZX_EDCX
+    账单查询: ZX_ZDCX
+    定价查询: ZX_DJCX
+  ZX_ZDCX:
+    借款操作咨询: JK_CQZX    # 引导借款
+    借款条件咨询: JK_TJZX
+    额度查询: ZX_EDCX
+    定价查询: ZX_DJCX
+    账单查询: ZX_ZDCX
+  ZX_QTZX:
+    额度查询: ZX_EDCX
+    定价查询: ZX_DJCX
+    账单查询: ZX_ZDCX
+    提额操作咨询: TL_CQZX
+    降息操作咨询: JX_CQZX
+
+  # 复合意图（FH_*）
+  FH_TLJX:
+    提额操作咨询: TL_CQZX
+    降息操作咨询: JX_CQZX
+  FH_TLXD:
+    提额操作咨询: TL_CQZX
+    借款操作咨询: JK_CQZX
+
+  # 反问澄清（MH_FWCL）：澄清后回到原业务状态
+  MH_FWCL:
+    提额业务咨询: TL_YWZX
+    降息业务咨询: JX_YWZX
+    借款操作咨询: JK_CQZX
+    额度查询: ZX_EDCX
+    定价查询: ZX_DJCX
+    账单查询: ZX_ZDCX
+
+  # 终态（到达后会话结束，无后续转移）
+  RG_BZSQ: {}
+  RG_QX_SJ: {}
+  FX_WGCZ: {}
+  FX_NBXX: {}
+  FX_HGBJ: {}
+  END: {}
+
+# ----------------------------------------------------------
+# 状态 → 业务大类 映射
+# ----------------------------------------------------------
+state_category_map:
+  INIT: INIT
+  TL_YWZX: TL
+  TL_ZRTJ: TL
+  TL_CQZX: TL
+  TL_CLZX: TL
+  TL_DZSX: TL
+  TL_JDZX: TL
+  TL_JGZX: TL
+  TL_JG: TL
+  JX_YWZX: JX
+  JX_ZRTJ: JX
+  JX_CQZX: JX
+  JX_JDZX: JX
+  JX_JGZX: JX
+  JX_JG: JX
+  JK_CQZX: JK
+  JK_TJZX: JK
+  ZX_EDCX: ZX
+  ZX_DJCX: ZX
+  ZX_ZDCX: ZX
+  ZX_QTZX: ZX
+  FH_TLJX: FH
+  FH_TLXD: FH
+  RG_BZSQ: RG
+  RG_QX_SJ: RG
+  FX_WGCZ: FX
+  FX_NBXX: FX
+  FX_HGBJ: FX
+  MH_KHSX: MH
+  MH_FWCL: MH
+  FY_LTXZ: FY
+  END: END
+
+# 终态集合
+terminal_states: [RG_BZSQ, RG_QX_SJ, FX_WGCZ, FX_NBXX, FX_HGBJ, END]
+
+# 正常业务状态（非终态、非 INIT；供漂移严重程度判定参考）
+business_states:
+  - TL_YWZX
+  - TL_ZRTJ
+  - TL_CQZX
+  - TL_CLZX
+  - TL_DZSX
+  - TL_JDZX
+  - TL_JGZX
+  - TL_JG
+  - JX_YWZX
+  - JX_ZRTJ
+  - JX_CQZX
+  - JX_JDZX
+  - JX_JGZX
+  - JX_JG
+  - JK_CQZX
+  - JK_TJZX
+  - ZX_EDCX
+  - ZX_DJCX
+  - ZX_ZDCX
+  - ZX_QTZX
+  - FH_TLJX
+  - FH_TLXD
+  - MH_KHSX
+  - MH_FWCL
+  - FY_LTXZ

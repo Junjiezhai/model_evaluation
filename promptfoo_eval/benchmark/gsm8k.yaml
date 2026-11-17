@@ -1,0 +1,40 @@
+# ============================================================
+# GSM8K 数学推理评测（promptfoo 独立 benchmark 轨）
+#
+# 模型接入：Kimi for Coding —— Anthropic Messages 协议端点，
+# 与 DeepEval 链路（common/modelHttpAction.py 预设 'kimi'）保持同一：
+#   端点 https://api.kimi.com/coding + 模型 kimi-for-coding + KIMI_API_KEY
+# （promptfoo 走 anthropic provider，请求体不带 cache_control/thinking，
+#   与 deepeval 评测场景的 thinking_type=None 口径一致）
+#
+# 前置：python promptfoo_eval/benchmark/scripts/build_gsm8k_tests.py [--limit N]
+# 运行（务必在仓库根目录执行，根目录 .env 才会被加载）：
+#   promptfoo eval -c promptfoo_eval/benchmark/gsm8k.yaml --filter-first-n 20   # 先小流量
+#   promptfoo eval -c promptfoo_eval/benchmark/gsm8k.yaml                        # 全量 1319 题
+# 查看：promptfoo view
+#
+# ⚠️ outputPath 以「执行命令的当前目录」为基准（tests/prompts 等则以配置文件所在目录为基准），
+#    下面写的就是"仓库根目录执行"时的落点，不要在别的目录下运行。
+# ============================================================
+
+description: GSM8K 数学推理（0-shot CoT，Kimi for Coding）
+
+prompts:
+  - prompts/gsm8k_cot.txt
+
+providers:
+  - id: anthropic:messages:kimi-for-coding
+    config:
+      apiBaseUrl: https://api.kimi.com/coding
+      apiKey: '{{env.KIMI_API_KEY}}'
+      temperature: 0
+      maxTokens: 2048
+
+tests: tests/gsm8k_test.csv
+
+defaultTest:
+  assert:
+    - type: python
+      value: file://scripts/gsm8k_assert.py
+
+outputPath: promptfoo_eval/benchmark/outputs/gsm8k_output.json

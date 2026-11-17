@@ -3,3 +3,7 @@ requests>=2.31.0
 loguru>=0.7.0
 pyyaml>=6.0.0
 python-dotenv>=1.0.0
+
+# ===== promptfoo benchmark 数据转换专用（仅 promptfoo_eval/benchmark/scripts/build_ceval_tests.py 使用，与 DeepEval 链路无关）=====
+pandas>=2.0.0
+pyarrow>=14.0.0

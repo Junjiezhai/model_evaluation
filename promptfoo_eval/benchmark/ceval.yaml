@@ -1,0 +1,37 @@
+# ============================================================
+# C-Eval 中文知识选择题评测（promptfoo 独立 benchmark 轨）
+#
+# 模型接入：与 gsm8k.yaml 同一 Kimi for Coding 端点/凭据，口径见该文件头部说明。
+#
+# 前置：python promptfoo_eval/benchmark/scripts/build_ceval_tests.py \
+#         [--subjects ...] [--limit-per-subject N]
+#       （fewshot 列由 dev 集 5 道示范题拼成，换 0-shot 对比实验只需把下面
+#         prompts 改成 prompts/ceval_0shot.txt）
+# 运行（务必在仓库根目录执行）：
+#   promptfoo eval -c promptfoo_eval/benchmark/ceval.yaml --filter-first-n 20
+# 查看：promptfoo view
+#
+# ⚠️ outputPath 以「执行命令的当前目录」为基准，必须在仓库根目录执行（同 gsm8k.yaml 头部说明）。
+# ============================================================
+
+description: C-Eval 中文知识选择题（5-shot，Kimi for Coding）
+
+prompts:
+  - prompts/ceval_5shot.txt
+
+providers:
+  - id: anthropic:messages:kimi-for-coding
+    config:
+      apiBaseUrl: https://api.kimi.com/coding
+      apiKey: '{{env.KIMI_API_KEY}}'
+      temperature: 0
+      maxTokens: 32
+
+tests: tests/ceval_test.csv
+
+defaultTest:
+  assert:
+    - type: python
+      value: file://scripts/ceval_assert.py
+
+outputPath: promptfoo_eval/benchmark/outputs/ceval_output.json

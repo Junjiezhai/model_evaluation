@@ -1,15 +1,32 @@
-# 信贷知识库智能问答助手 · 模型评测框架
+# 模型评测工作区：信贷问答评测（DeepEval）+ 公共评测集体验（promptfoo）
 
-基于 DeepEval + 自研多轮流水线的信贷问答评测工程。参考 making_decison_test（pytest 框架）重构，
+本仓库包含**两套互相独立、零代码耦合**的评测轨：
+
+| 轨道 | 工具 | 职责 |
+|---|---|---|
+| **信贷问答评测**（主） | DeepEval + 自研多轮流水线 | 信贷客服模型的正式出分：单轮 4 指标 / 多轮门禁加权、报告体系、缓存降本 |
+| **公共评测集体验**（学习） | promptfoo | GSM8K / C-Eval benchmark 跑分，学习 promptfoo 用法；不依赖、不调用信贷链路任何代码 |
+
+信贷轨基于 DeepEval + 自研多轮流水线的信贷问答评测工程。参考 making_decison_test（pytest 框架）重构，
 支持**单轮 / 多轮双流水线**、**技能文档驱动测试集生成**、**知识库注入作答**、**批量合并请求降本**、
 **指纹缓存**、**可插拔指标**、**性能指标 + 雷达图报告**。
+
+promptfoo 轨见 `promptfoo_eval/`（[其 README](promptfoo_eval/README.md) 为该轨权威文档），
+与信贷轨仅共享根目录 `.env` 的 Kimi 凭据，模型调用走**同一 Kimi for Coding 端点**，
+其余零共享（不 import `config` / `common` / `eval`，不读 `results/` / `test_cases/`）。
 
 ## 目录结构
 
 ```
 ├── config.py                        # 全部配置：路径 / 阈值 / 批量 / 缓存 / 权重
+├── debug_evaluation_by_deepeval.py  # ★ DeepEval IDE 调试入口（改 DebugConfig 后直接 Run）
 ├── common/modelHttpAction.py        # Kimi HTTP 客户端（两项目共用，勿改）
 ├── utils/handle_log.py              # loguru 日志
+├── promptfoo_eval/                  # promptfoo 独立 benchmark 轨（与信贷链路零耦合）
+│   ├── README.md                    #   该轨权威文档（快速开始/模型接入/判分口径/成本控制）
+│   ├── debug_benchmark_by_promptfoo.py  # ★ promptfoo IDE 调试入口：建库→评测→汇总→起查看器
+│   ├── benchmark/                   #   gsm8k.yaml / ceval.yaml + prompts + scripts + tests + outputs
+│   └── benchmark_data/              #   GSM8K + C-Eval 原始数据（gitignore，复现方式见其 README.md）
 ├── base_knowledge/                  # 基础知识素材
 │   ├── credit_standard_QA_intent.md     # 标准问答知识库（检索注入用）
 │   ├── intent_taxonomy.md               # 意图分类体系
@@ -66,6 +83,30 @@ python -m eval.run_evaluation --batch
 python -m eval.run_evaluation --force-answer     # 绕过作答缓存
 python -m eval.run_evaluation --intent-llm       # 多轮意图分类走 LLM（默认本地规则）
 ```
+
+IDE 调试：直接在 PyCharm 里 Run `debug_evaluation_by_deepeval.py`，
+修改文件内 `DebugConfig(...)` 的参数即可，无需敲命令行。
+
+## promptfoo 公共评测集轨（独立，详见 `promptfoo_eval/README.md`）
+
+用公共 benchmark 数据集体验 promptfoo：GSM8K（数学推理，0-shot CoT）+ C-Eval（中文知识选择题，5-shot），
+判分为本地 Python 断言（零裁判成本），分数口径**不可对标官方榜单**，价值在横向对比模型/提示词/参数。
+
+```bash
+pip install -r requirements.txt   # 含 pandas/pyarrow（仅 promptfoo 数据转换脚本使用）
+
+# 方式一：IDE 一键（推荐）——建库 → 评测 → 汇总 → 自动起结果查看器并打印链接
+python promptfoo_eval/debug_benchmark_by_promptfoo.py    # 改文件内 DebugConfig 后直接 Run
+
+# 方式二：命令行分步
+python promptfoo_eval/benchmark/scripts/build_gsm8k_tests.py --limit 300
+promptfoo eval -c promptfoo_eval/benchmark/gsm8k.yaml --filter-first-n 20   # 须在仓库根目录执行
+promptfoo view                                                              # Web UI 看明细
+```
+
+模型接入：promptfoo 内置 `anthropic:messages:kimi-for-coding` provider，与 `common/modelHttpAction.py`
+**同一端点（api.kimi.com/coding）、同一模型、同一 `KIMI_API_KEY`**；数据集原始文件在
+`promptfoo_eval/benchmark_data/`（gitignore，复现下载命令见其 README.md）。
 
 ## 两个评测流水线
 

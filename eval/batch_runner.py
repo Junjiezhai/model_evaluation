@@ -280,7 +280,7 @@ class SingleTurnJudgeStrategy(BatchStrategy):
     默认单轮流水线的 4 个标准指标（Faithfulness 等）由 DeepEval 内部并发管理，
     保留其"多阶段逐条核实"算法，不参与合并；本策略供**自定义业务指标**批量降本使用，
     典型场景：逐条检查清单评分（拒答恰当性、话术合规性等）。
-    使用示例见 eval/metrics/custom_example.py。
+    使用示例见 assertion/e2e/custom_example.py。
     """
 
     output_schema = {

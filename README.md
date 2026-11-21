@@ -1,11 +1,12 @@
-# 模型评测工作区：信贷问答评测（DeepEval）+ 公共评测集体验（promptfoo）
+# 模型评测工作区：信贷问答评测（DeepEval）+ 公共评测集体验（promptfoo）+ LLM 可观测性（Langfuse）
 
-本仓库包含**两套互相独立、零代码耦合**的评测轨：
+本仓库包含**两套互相独立、零代码耦合的评测轨**，外加一个横跨两轨的观测层：
 
 | 轨道 | 工具 | 职责 |
 |---|---|---|
 | **信贷问答评测**（主） | DeepEval + 自研多轮流水线 | 信贷客服模型的正式出分：单轮 4 指标 / 多轮门禁加权、报告体系、缓存降本 |
 | **公共评测集体验**（学习） | promptfoo | GSM8K / C-Eval benchmark 跑分，学习 promptfoo 用法；不依赖、不调用信贷链路任何代码 |
+| **LLM 可观测性**（横切） | Langfuse | 每次模型调用的 prompt/response/token 明细、agent 链路 span 回放、评测 score 下钻；埋点在 `common/modelHttpAction.py`，对两条评测轨的所有调用自动生效 |
 
 信贷轨基于 DeepEval + 自研多轮流水线的信贷问答评测工程。参考 making_decison_test（pytest 框架）重构，
 支持**单轮 / 多轮双流水线**、**技能文档驱动测试集生成**、**知识库注入作答**、**批量合并请求降本**、
@@ -20,8 +21,17 @@ promptfoo 轨见 `promptfoo_eval/`（[其 README](promptfoo_eval/README.md) 为�
 ```
 ├── config.py                        # 全部配置：路径 / 阈值 / 批量 / 缓存 / 权重
 ├── debug_evaluation_by_deepeval.py  # ★ DeepEval IDE 调试入口（改 DebugConfig 后直接 Run）
-├── common/modelHttpAction.py        # Kimi HTTP 客户端（两项目共用，勿改）
+├── common/modelHttpAction.py        # Kimi HTTP 客户端（两项目共用）★ 已内建 Langfuse generation 埋点
 ├── utils/handle_log.py              # loguru 日志
+├── observability/                   # LLM 可观测性轨（Langfuse，详见 project_notes/langfuse使用手册.md）
+│   ├── langfuse_obs.py              #   统一观测层：上报 / 本地渲染 / 轨迹捕获三模式（.env 加载、代理白名单）
+│   ├── simulate_agent_traces.py     #   trace 模拟器：6 种 agent 场景（含故意埋 bug 的护栏绕过演示）
+│   ├── import_eval_results.py       #   评测结果导入：case→trace、judge→score（打通评测↔观测）
+├── project_notes/                   # ★ 学习手册（各轨权威文档之外的独立学习文档）
+│   ├── deepeval使用手册.md            #   DeepEval 框架入门：核心能力 / 参数 / 标准用法 / 自定义扩展 / FAQ
+│   ├── promptfoo使用手册.md           #   promptfoo 入门：与 deepeval 手册平行，便于对照阅读
+│   ├── langfuse使用手册.md            #   Langfuse 权威文档：配置 / UI 指南 / 排障 / 三层接入 / 轨迹断言 / 迁移路径
+│   └── rc-credit-agent架构设计.md     #   目标 agent（LangGraph 信贷）架构设计，观测字段对齐依据
 ├── promptfoo_eval/                  # promptfoo 独立 benchmark 轨（与信贷链路零耦合）
 │   ├── README.md                    #   该轨权威文档（快速开始/模型接入/判分口径/成本控制）
 │   ├── debug_benchmark_by_promptfoo.py  # ★ promptfoo IDE 调试入口：建库→评测→汇总→起查看器
@@ -49,17 +59,29 @@ promptfoo 轨见 `promptfoo_eval/`（[其 README](promptfoo_eval/README.md) 为�
 │   ├── batch_runner.py              # 批量框架：合并请求 → 解析拆分 → 失败整组回退
 │   ├── kimi_llm.py                  # Kimi × DeepEval 桥接（answer/judge/synthesizer 三角色）
 │   ├── report.py                    # 单轮报告（含性能区块）+ 多轮报告（内联 SVG 雷达图）
-│   └── metrics/                     # 指标包（可插拔）
-│       ├── single_turn.py               # 单轮 4 标准指标（DeepEval，多阶段逐条核实）
-│       ├── multi_turn_judge.py          # 多轮 G1/G2 门禁 + Q1~Q5 加权评分
-│       ├── state_validator.py           # 会话状态机验证（YAML 驱动，strict/lenient/category）
-│       ├── local_asserts.py             # 本地断言：数值一致性 + 意图规则分类（零成本）
-│       └── custom_example.py            # ★ 自定义指标注释样例（GEval / BaseMetric 两条路线）
+├── assertion/                       # ★ 断言体系（按标准评测三层组织，eval/metrics 实现已迁入）
+│   ├── core.py                      #   内核：AssertionResult / ASSERTION_REGISTRY / 报告渲染 / Langfuse sink
+│   ├── e2e/                         #   端到端层：最终回答对不对
+│   │   ├── single_turn.py           #     DeepEval 4 指标（阈值 config.METRIC_THRESHOLDS）
+│   │   ├── multi_turn_judge.py      #     多轮 G1/G2 门禁 + Q1~Q5 加权 + aggregate_results
+│   │   ├── deterministic.py         #     数值一致性（本地零成本，原 local_asserts 拆分）
+│   │   └── custom_example.py        #     ★ 自定义指标注释样例（GEval / BaseMetric 两条路线）
+│   ├── trajectory/                  #   轨迹层：过程/路径合不合法
+│   │   ├── state_machine.py         #     状态机转移验证（原 state_validator.py，YAML 驱动）
+│   │   ├── intent.py                #     逐轮意图断言 + 7 类规则分类器（原 local_asserts 拆分）
+│   │   ├── engine.py + rules.yaml   #     YAML 规则引擎 + 8 条默认规则（结构/红线/预算/幂等/异步闭环）
+│   │   └── __main__.py              #     CLI：python -m assertion.trajectory（CI 退出码语义）
+│   └── component/                   #   组件层：单次调用/检索部件质量（骨架，随 agent 接入加深）
+│       ├── generation.py            #     结构化输出合法率断言（已注册 ASSERTION_REGISTRY）
+│       └── retrieval.py             #     检索命中率断言（已注册 ASSERTION_REGISTRY）
 ├── results/                         # 评测产物（结果 JSON / HTML 报告 / 作答缓存）
 └── logs/                            # 执行日志（按日 txt，自动清理 30 天前的日志）
 ```
 
 ## 快速开始
+
+> 框架本身的学习手册见 [project_notes/deepeval使用手册.md](project_notes/deepeval使用手册.md)
+> （核心能力 / 参数说明 / 标准用法 / 自定义扩展 / pytest 对比 / FAQ）。
 
 ```bash
 pip install -r requirements.txt
@@ -87,7 +109,7 @@ python -m eval.run_evaluation --intent-llm       # 多轮意图分类走 LLM（�
 IDE 调试：直接在 PyCharm 里 Run `debug_evaluation_by_deepeval.py`，
 修改文件内 `DebugConfig(...)` 的参数即可，无需敲命令行。
 
-## promptfoo 公共评测集轨（独立，详见 `promptfoo_eval/README.md`）
+## promptfoo 公共评测集轨（独立，详见 `promptfoo_eval/README.md`；框架学习手册见 [project_notes/promptfoo使用手册.md](project_notes/promptfoo使用手册.md)）
 
 用公共 benchmark 数据集体验 promptfoo：GSM8K（数学推理，0-shot CoT）+ C-Eval（中文知识选择题，5-shot），
 判分为本地 Python 断言（零裁判成本），分数口径**不可对标官方榜单**，价值在横向对比模型/提示词/参数。
@@ -107,6 +129,27 @@ promptfoo view                                                              # We
 模型接入：promptfoo 内置 `anthropic:messages:kimi-for-coding` provider，与 `common/modelHttpAction.py`
 **同一端点（api.kimi.com/coding）、同一模型、同一 `KIMI_API_KEY`**；数据集原始文件在
 `promptfoo_eval/benchmark_data/`（gitignore，复现下载命令见其 README.md）。
+
+## LLM 可观测性轨（Langfuse，权威文档见 [langfuse使用手册.md](project_notes/langfuse使用手册.md)）
+
+三层数据接入，**未配置凭据时自动降级为控制台渲染 span 树**，学习零依赖：
+
+```bash
+pip install langfuse   # v4 SDK（需在 .env 配置 LANGFUSE_PUBLIC_KEY/SECRET_KEY，见手册第二节）
+
+python -m observability.simulate_agent_traces      # ① trace 模拟器：5 种 agent 场景灌入平台
+python -m observability.import_eval_results        # ② 评测结果导入：case→trace、judge→score
+# ③ 模型调用埋点已内建于 common/modelHttpAction.py，跑任意评测即自动产生 generation 明细
+```
+
+Cloud UI 上：Traces 看 span 树回放（含每次调用的 prompt/response/token）、Sessions 按一次评测运行聚合、
+Scores 下钻到产生该分数的完整调用链。查询 API 注意 v1 已于 2026-11-16 下线（traces→`v2/observations`、
+scores→`v3/scores`，示例见手册 5.2）。观测模型字段对齐 rc-credit-agent 真实实现，将来接真实 agent 时代码原样复用。
+
+**评测链路内建观测**（2026-11-21 起）：跑 `eval/run_evaluation.py` 时自动生成结构化 trace——
+每个 case 一条 `eval_case.{case_id}` chain（多轮含逐轮 `round_N` span，缓存命中也留痕）、
+judge 独立 span 嵌真实 generation、judge 分数按 `e2e.*` 命名空间回挂 case trace，
+整次运行聚合在 session `eval-run-{run_id}` 下（手册 6.4）。UI → Sessions 即看本次评测全貌。
 
 ## 两个评测流水线
 
@@ -147,14 +190,17 @@ CSV 用例 → 逐轮对话执行（历史累积 + 逐轮计时）
 
 ## 自定义新指标（业务指标扩展）
 
-参照 `eval/metrics/custom_example.py` 两条路线：
+参照 `assertion/e2e/custom_example.py` 两条路线：
 
 - **路线一（GEval）**：自定义评分标准，复用 DeepEval 裁判调用框架，如"拒答恰当性"
 - **路线二（BaseMetric）**：完全掌控 `measure()`，可纯本地规则零成本，如"话术合规红线"
 
-接入两步：① 注册进 `eval/metrics/single_turn.py` 的 `SINGLE_METRIC_REGISTRY`；
+接入两步：① 注册进 `assertion/e2e/single_turn.py` 的 `SINGLE_METRIC_REGISTRY`；
 ② 环境变量 `EVAL_SINGLE_METRICS=faithfulness,refusal_appropriateness` 或
 `build_selected_metrics(judge, names)` 选用。批量降本用 `batch_runner.SingleTurnJudgeStrategy`。
+
+本地规则类断言（非 DeepEval 指标）可注册进 `assertion/core.py` 的 `ASSERTION_REGISTRY`
+（见 `assertion/component/generation.py` 的 `@register` 用法），自动获得统一报告与 Langfuse 出口。
 
 ## 报告产物（results/）
 
@@ -176,7 +222,9 @@ run_meta.json 配置快照），同时更新 `results/` 根下的 latest 副本�
 
 ```bash
 python -m eval.case_loader && python -m eval.batch_runner && python -m eval.qa_system \
-  && python -m eval.synthesize_cases && python -m eval.metrics.state_validator \
-  && python -m eval.metrics.local_asserts && python -m eval.metrics.multi_turn_judge \
-  && python -m eval.metrics.custom_example && python -m eval.report
+  && python -m eval.synthesize_cases && python -m eval.report \
+  && python -m assertion.e2e.single_turn && python -m assertion.e2e.custom_example \
+  && python -m assertion.e2e.deterministic && python -m assertion.trajectory.intent \
+  && python -m assertion.trajectory.state_machine \
+  && python -m assertion.component.generation && python -m assertion.component.retrieval
 ```

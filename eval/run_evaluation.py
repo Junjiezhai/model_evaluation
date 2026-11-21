@@ -49,12 +49,14 @@ from eval.batch_runner import BatchRunner, MultiTurnJudgeStrategy
 from eval.case_loader import VALID_INTENT_LABELS, load_multi_turn, load_single_turn
 from eval.kimi_llm import build_answer_llm, build_judge_llm
 from eval.knowledge_base import KnowledgeBase
-from eval.metrics import build_multi_turn_judge, build_single_turn_metrics, build_state_validator
-from eval.metrics.local_asserts import check_numeric_consistency, check_round_intent
-from eval.metrics.multi_turn_judge import aggregate_results
-from eval.metrics.state_validator import DriftSeverity
+from assertion import build_multi_turn_judge, build_single_turn_metrics, build_state_validator
+from assertion.e2e.deterministic import check_numeric_consistency
+from assertion.e2e.multi_turn_judge import aggregate_results
+from assertion.trajectory.intent import check_round_intent
+from assertion.trajectory.state_machine import DriftSeverity
 from eval.report import generate_multi_turn_report, generate_report
 from eval.history_index import generate_index
+from observability import langfuse_obs
 from utils.handle_log import log
 
 
@@ -244,6 +246,14 @@ def run_single_turn(args, kb, data: Dict):
                 'success': bool(m.success), 'reason': m.reason, 'error': m.error,
             } for m in (r.metrics_data or [])],
         })
+        # 观测回写：各指标分数挂到该 case 的 trace 上（Scores 页可下钻）
+        trace_id = getattr(rec, 'trace_id', None)
+        if trace_id:
+            for m in (r.metrics_data or []):
+                langfuse_obs.score(f'e2e.metric.{m.name}', m.score, trace_id=trace_id,
+                                   comment=(m.reason or '')[:500] or None,
+                                   metadata={'threshold': m.threshold,
+                                             'success': bool(m.success)})
 
     perf = _perf_stats([r.latency for r in answered])
     perf['amortized_count'] = sum(1 for r in answered if r.latency_is_amortized)
@@ -260,7 +270,7 @@ def _classify_intents_llm(questions: List[str], judge_llm) -> List[str]:
 
     返回与 questions 等长的意图标签列表（7 类中文标签）。
     """
-    from eval.metrics.local_asserts import classify_intent_rule
+    from assertion.trajectory.intent import classify_intent_rule
 
     if not questions:
         return []
@@ -380,7 +390,7 @@ def run_multi_turn(args, kb, data: Dict):
     # 3. 会话状态机验证（仅对标注了 state_intent 的轮次；状态链式推进）
     from collections import Counter as _Counter
 
-    from eval.metrics.state_validator import MultiTurnResult
+    from assertion.trajectory.state_machine import MultiTurnResult
     validator = build_state_validator()
     state_results: Dict[str, Dict] = {}
     for traj in trajectories:
@@ -418,10 +428,55 @@ def run_multi_turn(args, kb, data: Dict):
             judge_prompt_builder=judge.build_batch_prompt,
             group_size=config.BATCH_GROUP_SIZE_MULTI_JUDGE)
         batch_runner = BatchRunner(judge_llm, strategy)
-        judge_results = judge.evaluate_batch(items, batch_runner)
+        with langfuse_obs.observe('judge.batch_all', as_type='span',
+                                  metadata={'case_count': len(items), 'batch': True}):
+            judge_results = judge.evaluate_batch(items, batch_runner)
     else:
-        judge_results = [judge.evaluate(it['dialogue'], case_id=it['case_id'],
-                                        case_desc=it['case_desc']) for it in items]
+        judge_results = []
+        for it in items:
+            # judge 独立 span：对话 chain 已结束，以同 session 下的兄弟 span 留痕，
+            # 与 case trace 通过 score 回挂 + session 聚合双向打通
+            with langfuse_obs.observe(f'judge.{it["case_id"]}', as_type='span',
+                                      input=it['dialogue'],
+                                      metadata={'case_desc': it['case_desc']}) as j_obs:
+                jr = judge.evaluate(it['dialogue'], case_id=it['case_id'],
+                                    case_desc=it['case_desc'])
+                j_obs.update(output={'overall_score': jr.overall_score,
+                                     'gate_passed': jr.gate_passed})
+            judge_results.append(jr)
+
+    # 4.1 观测回写：judge 分数挂到对应 case 的对话 trace 上（score 以 traceId 归属，自动随 session）
+    for traj, jr in zip(trajectories, judge_results):
+        trace_id = getattr(traj, 'trace_id', None)
+        if not trace_id:
+            continue
+        langfuse_obs.score('e2e.overall', jr.overall_score, trace_id=trace_id,
+                           comment=(jr.overall_comment or '')[:500] or None)
+        langfuse_obs.score('e2e.gate_passed', bool(jr.gate_passed), trace_id=trace_id,
+                           data_type='BOOLEAN')
+        for g in jr.gate_checks:
+            langfuse_obs.score(f'e2e.gate.{g.dimension}', g.verdict, trace_id=trace_id,
+                               data_type='CATEGORICAL',
+                               comment='; '.join(g.failed_items) or None)
+        for dim, val in (jr.dimension_scores or {}).items():
+            langfuse_obs.score(f'e2e.dim.{dim}', val, trace_id=trace_id)
+        for s in jr.per_turn_scores:
+            langfuse_obs.score(f'e2e.Q1_context_memory.turn{s.turn}',
+                               s.Q1_context_memory, trace_id=trace_id,
+                               comment=(s.Q1_reason or '')[:500] or None)
+            langfuse_obs.score(f'e2e.Q2_intent_responsiveness.turn{s.turn}',
+                               s.Q2_intent_responsiveness, trace_id=trace_id,
+                               comment=(s.Q2_reason or '')[:500] or None)
+            langfuse_obs.score(f'e2e.Q3_contamination.turn{s.turn}',
+                               s.Q3_contamination, trace_id=trace_id,
+                               comment=(s.Q3_reason or '')[:500] or None)
+        if jr.dialogue_score:
+            langfuse_obs.score('e2e.Q4_coherence', jr.dialogue_score.Q4_coherence,
+                               trace_id=trace_id,
+                               comment=(jr.dialogue_score.Q4_reason or '')[:500] or None)
+            langfuse_obs.score('e2e.Q5_consistency', jr.dialogue_score.Q5_consistency,
+                               trace_id=trace_id,
+                               comment=(jr.dialogue_score.Q5_reason or '')[:500] or None)
 
     # 5. 序列化：rounds 按 case 分组 + judge + state
     case_dicts = []
@@ -490,16 +545,18 @@ def main(argv=None):
         'generated_at': started_at.strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-    # 2. 执行流水线
+    # 2. 执行流水线（整条包在 eval_run 上下文中：期间所有 trace 归属 session eval-run-{run_id}）
     judge_name = answer_name = ''
-    if args.mode in ('single', 'all'):
-        judge_name, answer_name = run_single_turn(args, kb, data)
-    if args.mode in ('multi', 'all'):
-        j, a = run_multi_turn(args, kb, data)
-        judge_name = judge_name or j
-        answer_name = answer_name or a
+    with langfuse_obs.eval_run(f'eval-run-{run_id}'):
+        if args.mode in ('single', 'all'):
+            judge_name, answer_name = run_single_turn(args, kb, data)
+        if args.mode in ('multi', 'all'):
+            j, a = run_multi_turn(args, kb, data)
+            judge_name = judge_name or j
+            answer_name = answer_name or a
     data['model'] = judge_name
     data['answer_model'] = answer_name
+    langfuse_obs.flush()
 
     # 3. 统一落盘：历史快照 + latest 副本 + 运行配置快照
     duration = time.time() - start_ts

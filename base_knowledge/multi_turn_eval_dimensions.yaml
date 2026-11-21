@@ -3,7 +3,7 @@
 # 与单轮知识库的核心区别：关注上下文记忆、意图转移、对话连贯性
 #
 # 使用方式：
-#   由 eval/metrics/multi_turn_judge.py 加载，注入到多轮评估 prompt 中
+#   由 assertion/e2e/multi_turn_judge.py 加载，注入到多轮评估 prompt 中
 #   （评估维度与 skills/gen_multi_turn_cases.md 的评测维度场景 A~H 对齐）
 # ============================================================
 

@@ -2,7 +2,7 @@
 # 信贷客服会话状态转移矩阵（程序化定义）
 #
 # 派生自 base_knowledge/session_state_transition.md（人读规范），
-# 由 eval/metrics/state_validator.py 加载消费。
+# 由 assertion/trajectory/state_machine.py 加载消费。
 # 注意：修改本文件时请同步检查 session_state_transition.md，
 # 两边以本 YAML 为程序化消费的唯一来源。
 #

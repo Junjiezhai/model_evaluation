@@ -78,6 +78,19 @@ RETRYABLE_STATUS_CODES = (429, 502, 503, 504)
 _UNSET = object()
 
 
+def _normalize_usage(usage: Dict[str, Any]) -> Dict[str, int]:
+    """把 anthropic/openai 两种协议的 token 用量统一为 Langfuse 计量单位。
+
+    anthropic: input_tokens / output_tokens
+    openai:    prompt_tokens / completion_tokens / total_tokens
+    Langfuse:  input / output / total
+    """
+    inp = usage.get('input_tokens') or usage.get('prompt_tokens') or 0
+    out = usage.get('output_tokens') or usage.get('completion_tokens') or 0
+    total = usage.get('total_tokens') or (inp + out)
+    return {'input': int(inp), 'output': int(out), 'total': int(total)}
+
+
 class ModelHttpAction:
     """
     外部模型 HTTP 调用客户端
@@ -332,6 +345,96 @@ class ModelHttpAction:
         desc: str = '【模型调用】',
         max_retries: int = 3,
         retry_backoff: float = 2.0,
+        _usage_out: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        发送多轮对话消息并获取模型回复
+
+        Args:
+            messages: 消息列表，格式 [{"role": "user", "content": "..."}, ...]
+            max_tokens: 最大生成 token 数
+            temperature: 温度参数
+            thinking_type: 思考模式，默认取实例级配置（'adaptive'）；
+                           传 None 表示不传该字段（仅 anthropic 协议生效）
+            json_schema: 结构化输出 JSON Schema
+            desc: 日志描述
+            max_retries: 最大重试次数（默认3次）
+            retry_backoff: 重试退避基数（默认2.0秒）
+            _usage_out: 内部参数——Langfuse 埋点用，把本次调用的 token 用量回传
+                        给调用方（线程安全：每个调用独立 dict）
+
+        Returns:
+            模型返回的文本内容
+
+        Example（仅说明，不可作为 doctest 执行）:
+            client = ModelHttpAction()  # 默认 kimi
+            messages = [
+                {"role": "system", "content": "你是助手"},
+                {"role": "user", "content": "你好"},
+            ]
+            response = client.chat_messages(messages)
+        """
+        # ---- Langfuse 观测埋点（未配置 LANGFUSE 凭据时零开销直通）----
+        try:
+            from observability.langfuse_obs import is_enabled as _lf_enabled
+            from observability.langfuse_obs import observe as _lf_observe
+        except ImportError:
+            _lf_enabled, _lf_observe = None, None
+
+        if _lf_observe is None or not _lf_enabled():
+            return self._chat_messages_impl(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                thinking_type=thinking_type,
+                json_schema=json_schema,
+                desc=desc,
+                max_retries=max_retries,
+                retry_backoff=retry_backoff,
+            )
+
+        usage_out: Dict[str, Any] = {}
+        with _lf_observe(
+            'llm.chat_messages', as_type='generation', model=self.model_name,
+            input=messages,
+            model_parameters={
+                'temperature': temperature,
+                'max_tokens': max_tokens,
+                'thinking_type': None if thinking_type is _UNSET else thinking_type,
+            },
+            metadata={'provider': self.provider, 'api_type': self.api_type,
+                      'desc': desc, 'base_url': self.base_url},
+        ) as _lf_obs:
+            try:
+                text = self._chat_messages_impl(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    thinking_type=thinking_type,
+                    json_schema=json_schema,
+                    desc=desc,
+                    max_retries=max_retries,
+                    retry_backoff=retry_backoff,
+                    _usage_out=usage_out,
+                )
+            except Exception as exc:
+                _lf_obs.update(level='ERROR', status_message=str(exc)[:300])
+                raise
+            _lf_obs.update(output=text, usage_details=_normalize_usage(usage_out))
+            return text
+
+    def _chat_messages_impl(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        max_tokens: int = 2048,
+        temperature: Optional[float] = None,
+        thinking_type: Any = _UNSET,
+        json_schema: Optional[Dict] = None,
+        desc: str = '【模型调用】',
+        max_retries: int = 3,
+        retry_backoff: float = 2.0,
+        _usage_out: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         发送多轮对话消息并获取模型回复
@@ -394,6 +497,9 @@ class ModelHttpAction:
 
                     if not text:
                         raise RuntimeError(f'{desc}模型返回内容为空，响应: {resp}')
+
+                    if _usage_out is not None:
+                        _usage_out.update(usage)
 
                     return text
 

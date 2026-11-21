@@ -7,7 +7,7 @@
   路线二【灵活，复杂场景】BaseMetric 子类：完全掌控 measure() 逻辑（可本地规则 + LLM 混合）
 
 新增指标后两步接入评测流水线：
-  1. 在 eval/metrics/single_turn.py 的 SINGLE_METRIC_REGISTRY 注册
+  1. 在 assertion/e2e/single_turn.py 的 SINGLE_METRIC_REGISTRY 注册
   2. 通过环境变量 EVAL_SINGLE_METRICS 或 build_selected_metrics(judge, names) 选用
 
 批量降本：路线一/二的逐条裁判调用都可用 eval/batch_runner.SingleTurnJudgeStrategy
@@ -152,7 +152,7 @@ if __name__ == '__main__':
     print('[OK] 路线二 BaseMetric 本地红线规则')
 
     # 注册表示例
-    from eval.metrics.single_turn import SINGLE_METRIC_REGISTRY
+    from assertion.e2e.single_turn import SINGLE_METRIC_REGISTRY
     assert 'faithfulness' in SINGLE_METRIC_REGISTRY
     print('[OK] SINGLE_METRIC_REGISTRY 注册表可用')
 

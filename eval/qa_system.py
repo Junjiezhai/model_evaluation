@@ -23,6 +23,7 @@ from deepeval.test_case import LLMTestCase
 
 import config
 from eval.case_loader import MultiTurnCase, SingleTurnCase
+from observability import langfuse_obs
 from utils.handle_log import log
 
 
@@ -282,12 +283,19 @@ def answer_single_turn(cases: List[SingleTurnCase], kb, answer_llm, *,
     results: List[Optional[AnswerRecord]] = [None] * len(cases)
     todo: List[int] = []
 
-    # 第一遍：缓存命中直接复用
+    # 第一遍：缓存命中直接复用（也留一条 chain 痕迹，缓存命中的 case 在 Langfuse 可见）
     for idx, case in enumerate(cases):
         if use_cache:
             cached = cache.get(answer_cache_key(case.input))
             if cached is not None and cached.get('actual_output'):
-                results[idx] = _cached_to_record(case, cached)
+                with langfuse_obs.observe(
+                    f'eval_case.{case.case_id}', as_type='chain',
+                    input=case.input, output=cached.get('actual_output'),
+                    metadata={'case_type': 'single_turn', 'cache_hit': True,
+                              'category': case.category, 'priority': case.priority},
+                ):
+                    results[idx] = _cached_to_record(case, cached)
+                    results[idx].trace_id = langfuse_obs.current_trace_id()
                 continue
         todo.append(idx)
 
@@ -299,8 +307,16 @@ def answer_single_turn(cases: List[SingleTurnCase], kb, answer_llm, *,
         _answer_in_batches(cases, todo, results, kb, answer_llm, cache, batch_size)
     else:
         for idx in todo:
-            record = answer_one(cases[idx], kb, answer_llm, cache)
-            log.info(f'【作答】{cases[idx].case_id} 完成，耗时 {record.latency}s')
+            case = cases[idx]
+            with langfuse_obs.observe(
+                f'eval_case.{case.case_id}', as_type='chain',
+                input=case.input,
+                metadata={'case_type': 'single_turn', 'batch': False,
+                          'category': case.category, 'priority': case.priority},
+            ):
+                record = answer_one(case, kb, answer_llm, cache)
+                record.trace_id = langfuse_obs.current_trace_id()
+            log.info(f'【作答】{case.case_id} 完成，耗时 {record.latency}s')
             results[idx] = record
 
     return results  # type: ignore
@@ -336,29 +352,37 @@ def _answer_in_batches(cases, todo, results, kb, answer_llm, cache, batch_size):
 
         t0 = time.perf_counter()
         try:
-            data = client.chat_with_json_output(
-                '\n'.join(lines),
-                json_schema={
-                    'type': 'object',
-                    'properties': {
-                        'answers': {
-                            'type': 'array',
-                            'items': {
-                                'type': 'object',
-                                'properties': {
-                                    'index': {'type': 'integer'},
-                                    'answer': {'type': 'string'},
+            # 组级 chain：批量合并的一次 generation 无法拆到各 case，以组为单位留痕
+            with langfuse_obs.observe(
+                f'eval_case.batch_group_{start // group_size + 1}', as_type='chain',
+                input=[c.case_id for c in group_cases],
+                metadata={'case_type': 'single_turn', 'batch': True,
+                          'group_size': len(group_cases)},
+            ):
+                data = client.chat_with_json_output(
+                    '\n'.join(lines),
+                    json_schema={
+                        'type': 'object',
+                        'properties': {
+                            'answers': {
+                                'type': 'array',
+                                'items': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'index': {'type': 'integer'},
+                                        'answer': {'type': 'string'},
+                                    },
+                                    'required': ['index', 'answer'],
                                 },
-                                'required': ['index', 'answer'],
                             },
                         },
+                        'required': ['answers'],
                     },
-                    'required': ['answers'],
-                },
-                system_prompt=config.ANSWER_SYSTEM_PROMPT,
-                max_tokens=8192,
-                desc=f'【批量作答】组大小={len(group_cases)}',
-            )
+                    system_prompt=config.ANSWER_SYSTEM_PROMPT,
+                    max_tokens=8192,
+                    desc=f'【批量作答】组大小={len(group_cases)}',
+                )
+                group_trace_id = langfuse_obs.current_trace_id()
             group_latency = round(time.perf_counter() - t0, 3)
             answers = {int(a['index']): str(a.get('answer', '')).strip()
                        for a in data.get('answers', []) if isinstance(a, dict) and 'index' in a}
@@ -382,6 +406,7 @@ def _answer_in_batches(cases, todo, results, kb, answer_llm, cache, batch_size):
                     expect_refuse=case.expect_refuse,
                     remark=case.remark,
                 )
+                record.trace_id = group_trace_id
                 if cache is not None:
                     cache.put(answer_cache_key(case.input), asdict(record))
                 results[idx] = record
@@ -414,52 +439,70 @@ def run_multi_turn_dialog(case: MultiTurnCase, kb, answer_llm, *,
     trajectory = DialogTrajectory(case_id=case.case_id, case_type=case.case_type, case_desc=case.case_desc)
     history: List[dict] = []  # [{'role','content'}...]，system 消息由 chat() 注入
 
-    for rnd in case.rounds:
-        pairs = kb.retrieve(rnd.user_question, config.RETRIEVAL_TOP_K)
-        context = _format_context(pairs)
-        history_text = '\n'.join(
-            f'{"用户" if m["role"] == "user" else "助手"}：{m["content"]}' for m in history
-        ) or '（无）'
-        prompt = ANSWER_PROMPT_TEMPLATE.format(
-            context=context, history=history_text, question=rnd.user_question)
+    # case 级 chain trace：一轮评测 case 在 Langfuse 中对应一条 trace（session 由调用方注入）
+    with langfuse_obs.observe(
+        f'eval_case.{case.case_id}', as_type='chain',
+        metadata={'case_type': case.case_type, 'case_desc': case.case_desc,
+                  'rounds': len(case.rounds)},
+    ):
+        for rnd in case.rounds:
+            pairs = kb.retrieve(rnd.user_question, config.RETRIEVAL_TOP_K)
+            context = _format_context(pairs)
+            history_text = '\n'.join(
+                f'{"用户" if m["role"] == "user" else "助手"}：{m["content"]}' for m in history
+            ) or '（无）'
+            prompt = ANSWER_PROMPT_TEMPLATE.format(
+                context=context, history=history_text, question=rnd.user_question)
 
-        key = multi_turn_cache_key(
-            case.case_id, rnd.round_no, _history_fingerprint(history))
-        cached = cache.get(key) if use_cache else None
+            key = multi_turn_cache_key(
+                case.case_id, rnd.round_no, _history_fingerprint(history))
+            cached = cache.get(key) if use_cache else None
 
-        if cached is not None and cached.get('actual_answer'):
-            actual = cached['actual_answer']
-            latency = float(cached.get('latency', 0.0))
-            cache_hit = True
-            log.info(f'【多轮作答】{case.case_id} 第{rnd.round_no}轮命中缓存')
-        else:
-            # 复用 answer_llm 的 generate（内部走 client.chat，system_prompt=ANSWER_SYSTEM_PROMPT）
-            t0 = time.perf_counter()
-            actual = answer_llm.generate(prompt).strip()
-            latency = round(time.perf_counter() - t0, 3)
-            cache_hit = False
-            if cache is not None:
-                cache.put(key, {'actual_answer': actual, 'latency': latency})
+            with langfuse_obs.observe(
+                f'round_{rnd.round_no}', as_type='span',
+                input=rnd.user_question,
+                metadata={'round_intent': rnd.round_intent, 'state_intent': rnd.state_intent,
+                          'context_assert_type': rnd.context_assert_type,
+                          'expect_refuse': rnd.expect_refuse},
+            ) as round_obs:
+                if cached is not None and cached.get('actual_answer'):
+                    actual = cached['actual_answer']
+                    latency = float(cached.get('latency', 0.0))
+                    cache_hit = True
+                    log.info(f'【多轮作答】{case.case_id} 第{rnd.round_no}轮命中缓存')
+                else:
+                    # 复用 answer_llm 的 generate（内部走 client.chat，system_prompt=ANSWER_SYSTEM_PROMPT）
+                    t0 = time.perf_counter()
+                    actual = answer_llm.generate(prompt).strip()
+                    latency = round(time.perf_counter() - t0, 3)
+                    cache_hit = False
+                    if cache is not None:
+                        cache.put(key, {'actual_answer': actual, 'latency': latency})
+                # 作答（含缓存命中）回填到 round span：缓存命中的运行也能看到完整对话轨迹
+                round_obs.update(output=actual, metadata={'cache_hit': cache_hit, 'latency': latency})
 
-        trajectory.rounds.append(RoundRecord(
-            round_no=rnd.round_no,
-            user_question=rnd.user_question,
-            expected_answer=rnd.expected_answer,
-            actual_answer=actual,
-            retrieval_context=[p.as_context() for p in pairs],
-            latency=latency,
-            round_intent=rnd.round_intent,
-            state_intent=rnd.state_intent,
-            context_assert_type=rnd.context_assert_type,
-            previous_intent=rnd.previous_intent,
-            expect_refuse=rnd.expect_refuse,
-            remark=rnd.remark,
-            cache_hit=cache_hit,
-        ))
-        # 维护对话历史（供下一轮注入）
-        history.append({'role': 'user', 'content': rnd.user_question})
-        history.append({'role': 'assistant', 'content': actual})
-        log.info(f'【多轮作答】{case.case_id} 第{rnd.round_no}轮完成，耗时 {latency}s')
+            trajectory.rounds.append(RoundRecord(
+                round_no=rnd.round_no,
+                user_question=rnd.user_question,
+                expected_answer=rnd.expected_answer,
+                actual_answer=actual,
+                retrieval_context=[p.as_context() for p in pairs],
+                latency=latency,
+                round_intent=rnd.round_intent,
+                state_intent=rnd.state_intent,
+                context_assert_type=rnd.context_assert_type,
+                previous_intent=rnd.previous_intent,
+                expect_refuse=rnd.expect_refuse,
+                remark=rnd.remark,
+                cache_hit=cache_hit,
+            ))
+            # 维护对话历史（供下一轮注入）
+            history.append({'role': 'user', 'content': rnd.user_question})
+            history.append({'role': 'assistant', 'content': actual})
+            log.info(f'【多轮作答】{case.case_id} 第{rnd.round_no}轮完成，耗时 {latency}s')
+
+        # case trace id 供评测主入口回挂 judge 分数（judge 在对话上下文结束后才执行）
+        trajectory.trace_id = langfuse_obs.current_trace_id()
 
     return trajectory
 
@@ -498,6 +541,8 @@ def build_llm_test_cases(records: List[AnswerRecord]) -> List[LLMTestCase]:
 
 if __name__ == '__main__':
     import tempfile
+    # 自测不往 Cloud 灌数据：强制本地渲染模式（observe 调用照常，只不上报）
+    os.environ['LANGFUSE_ENABLED'] = 'false'
     print('=' * 60)
     print('  qa_system 自测（stub）')
     print('=' * 60)

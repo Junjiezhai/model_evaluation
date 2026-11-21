@@ -1,7 +1,7 @@
 # DeepEval 框架使用手册（小白入门版）
 
 > 适用版本：deepeval 4.3.1（本仓库实际安装版本）
-> 本手册结合本仓库 `eval/` 目录下的真实评测工程编写，所有代码示例均经过实际运行验证。
+> 本手册结合本仓库 `../eval` 目录下的真实评测工程编写，所有代码示例均经过实际运行验证。
 
 > **新手阅读路径建议**（约 1.5 小时）：
 > ① 第 0 节环境准备 → ② 第 1.1~1.2 节建立框架认知 → ③ 第 3.1 节跑通最小示例 → ④ 第 2.1/2.2 节理解参数 → ⑤ 第 4.1 节接入自己的模型 → ⑥ 遇到问题时查第 6 节 FAQ。
@@ -30,12 +30,12 @@ pip install deepeval          # 安装
 deepeval --version            # 验证安装
 ```
 
-**务必钉死版本号**。deepeval 4.x 迭代很快、API 变动频繁（本仓库升级时遇到 3 处不兼容变更，见 5.3），`requirements.txt` 中写作 `deepeval==4.3.1` 而不是 `>=4.3.1`，避免团队环境或 CI 中"静默升级"导致代码跑不起来。
+**务必钉死版本号**。deepeval 4.x 迭代很快、API 变动频繁（本仓库升级时遇到 3 处不兼容变更，见 5.3），`../requirements.txt` 中写作 `deepeval==4.3.1` 而不是 `>=4.3.1`，避免团队环境或 CI 中"静默升级"导致代码跑不起来。
 
 ### 0.2 第一次运行前必须知道的三件事
 
 1. **默认裁判是 OpenAI 的 GPT-4o**。不传 `model` 参数时框架会去找 `OPENAI_API_KEY`——没有该环境变量会直接报错。国内环境的正确姿势是第一时间完成自定义模型接入（见 4.1 节），彻底绕开 OpenAI 依赖。
-2. **环境变量要在 `import deepeval` 之前设置**（见 2.4 节），推荐写在入口文件最顶部或 `.env` + `python-dotenv`。
+2. **环境变量要在 `import deepeval` 之前设置**（见 2.4 节），推荐写在入口文件最顶部或 `../.env` + `python-dotenv`。
 3. **框架默认上报匿名遥测**（指标名、版本号等，不含业务数据）。介意的话设 `DEEPEVAL_TELEMETRY_OPT_OUT=YES`。
 
 ### 0.3 本仓库的最小环境清单
@@ -43,9 +43,9 @@ deepeval --version            # 验证安装
 | 依赖 | 用途 |
 |---|---|
 | `deepeval==4.3.1` | 评测框架本体 |
-| `requests` | 自研 LLM 客户端（`eval/kimi_llm.py`）发起 HTTP 调用 |
+| `requests` | 自研 LLM 客户端（`../eval/kimi_llm.py`）发起 HTTP 调用 |
 | `pyyaml` | 评分细则、状态机矩阵等配置外置 |
-| `python-dotenv` | API Key 等敏感信息走 `.env`，不进代码仓库 |
+| `python-dotenv` | API Key 等敏感信息走 `../.env`，不进代码仓库 |
 
 > 说明：Confident AI（deepeval 官方云端评测平台，`deepeval login` 那一套）本仓库未使用——评测数据不出内网，全部结果自行落盘（JSON + HTML 报告）。需要云端看板、团队协作时可自行了解，本手册不覆盖。
 
@@ -109,7 +109,7 @@ synthesizer = Synthesizer(model=你的LLM)
 goldens = synthesizer.generate_goldens_from_docs(document_paths=["知识库.pdf"])
 ```
 
-从文档/知识库自动生成带标准答案的测试集，支持问题进化（改写、模糊化、对抗化）和过滤。解决"没有测试数据"的冷启动问题。（本仓库为了完全控制出题风格，自行用 Kimi 实现了简化版，见 `eval/synthesize_cases.py`。）
+从文档/知识库自动生成带标准答案的测试集，支持问题进化（改写、模糊化、对抗化）和过滤。解决"没有测试数据"的冷启动问题。（本仓库为了完全控制出题风格，自行用 Kimi 实现了简化版，见 `../eval/synthesize_cases.py`。）
 
 #### ⑤ 模型接入抽象层
 
@@ -199,12 +199,12 @@ results = evaluate([convo], [
 | 多轮需求 | DeepEval 原生 | 本仓库实现 |
 |---|---|---|
 | 对话执行（历史注入/检索/计时/指纹缓存） | ❌ 无 | `eval/qa_system.py::run_multi_turn_dialog` |
-| G1/G2 一票否决 + Q1~Q5 加权综合分 | ❌ 只有独立 threshold | `eval/metrics/multi_turn_judge.py`（单次结构化调用出全维度，支持批量合并降本） |
-| 评分细则外置（YAML 注入 judge prompt） | ❌ criteria 硬编码 | `base_knowledge/multi_turn_eval_dimensions.yaml` |
-| 会话状态机 / 链式状态验证 | ❌ 无 | `eval/metrics/state_validator.py`（YAML 矩阵驱动，strict/lenient/category） |
+| G1/G2 一票否决 + Q1~Q5 加权综合分 | ❌ 只有独立 threshold | `../assertion/e2e/multi_turn_judge.py`（单次结构化调用出全维度，支持批量合并降本） |
+| 评分细则外置（YAML 注入 judge prompt） | ❌ criteria 硬编码 | `../base_knowledge/multi_turn_eval_dimensions.yaml` |
+| 会话状态机 / 链式状态验证 | ❌ 无 | `../assertion/trajectory/state_machine.py`（YAML 矩阵驱动，strict/lenient/category） |
 | 逐轮独立期望值（轮级 intent/state 标注） | ❌ Turn 仅 role/content 语义 | 13 列 CSV：`round_intent`/`state_intent` 每轮独立 |
-| 数值一致性本地断言 / 意图混淆矩阵 / 雷达图报告 | ❌ 无 | `eval/metrics/local_asserts.py`、`eval/report.py::generate_multi_turn_report` |
-| 自定义多轮指标扩展 | ✅ ConversationalGEval | 同一条路：GEval/BaseMetric 契约兼容（`eval/metrics/custom_example.py`） |
+| 数值一致性本地断言 / 意图混淆矩阵 / 雷达图报告 | ❌ 无 | `../assertion/e2e/deterministic.py` + `assertion/trajectory/intent.py`、`eval/report.py::generate_multi_turn_report` |
+| 自定义多轮指标扩展 | ✅ ConversationalGEval | 同一条路：GEval/BaseMetric 契约兼容（`../assertion/e2e/custom_example.py`） |
 
 > 经验法则：**对话需要现跑、评测含业务规则与门禁、judge 成本敏感**——三者命中任一，就走自研流水线；
 > 只是给已有对话记录按通用维度打分，用 1.3.3 的原生组合即可。
@@ -343,28 +343,29 @@ for r in results.test_results:
 └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
 ```
 
-对应代码（摘自本仓库 `eval/run_evaluation.py`，已脱敏精简）：
+对应代码（摘自本仓库 `../eval/run_evaluation.py`，已脱敏精简）：
 
 ```python
 # ---- 阶段 1：测试集（本仓库用 Kimi + 技能文档自行合成，存 CSV 复用）----
 from eval.case_loader import load_single_turn
+
 cases_data = load_single_turn(limit=None)
 
 # ---- 阶段 2：被测系统作答 → 组装 LLMTestCase ----
 test_cases = []
 for c in cases_data:
-    contexts = retriever.retrieve(c.input, top_k=3)      # 模拟 RAG 检索
+    contexts = retriever.retrieve(c.input, top_k=3)  # 模拟 RAG 检索
     answer = answer_llm.generate(build_prompt(contexts, c.input))
     test_cases.append(LLMTestCase(
         input=c.input,
         actual_output=answer,
         retrieval_context=[x.text for x in contexts],
         expected_output=c.expected_output,
-        metadata={"category": c.category},               # 透传，报告按分类聚合用
+        metadata={"category": c.category},  # 透传，报告按分类聚合用
     ))
 
 # ---- 阶段 3：Judge 打分 ----
-judge = build_judge_llm()                                    # 自定义 Kimi 裁判（见 4.1）
+judge = build_judge_llm()  # 自定义 Kimi 裁判（见 4.1）
 metrics = [
     FaithfulnessMetric(threshold=0.7, model=judge),
     AnswerRelevancyMetric(threshold=0.7, model=judge),
@@ -378,10 +379,10 @@ metrics = [
 results = evaluate(test_cases, metrics)
 
 # ---- 阶段 4：结果落盘 + 报告 ----
-data = serialize_results(results)                            # 提取 score/success/reason
-json.dump(data, open("results/evaluation_results.json", "w", encoding="utf-8"),
+data = serialize_results(results)  # 提取 score/success/reason
+json.dump(data, open("../results/evaluation_results.json", "w", encoding="utf-8"),
           ensure_ascii=False, indent=2)
-generate_html_report(data)                                   # 自包含 HTML 可视化
+generate_html_report(data)  # 自包含 HTML 可视化
 ```
 
 ### 3.3 指标选择与数据字段的对应关系（最常见的配置错误来源）
@@ -613,10 +614,10 @@ class MyMetric(BaseMetric):
 | `eval/run_evaluation.py` | 3.2 标准评测流程 + 多轮自研流水线的完整实现（CLI 入口） |
 | `eval/case_loader.py` / `eval/synthesize_cases.py` | 阶段 1：CSV 测试集读取校验 / 技能文档驱动生成 |
 | `eval/qa_system.py` | 阶段 2：单轮与多轮作答链路（检索注入、批量、缓存、计时） |
-| `eval/metrics/single_turn.py` | 单轮 4 指标的构建与注册（含自定义指标接入点） |
-| `eval/metrics/multi_turn_judge.py` | 1.3.5 多轮 G1/G2 门禁 + Q1~Q5 加权评估器 |
-| `eval/metrics/state_validator.py` | 1.3.5 会话状态机验证（YAML 矩阵驱动） |
-| `eval/metrics/local_asserts.py` | 1.3.5 数值一致性 + 意图分类本地断言 |
+| `assertion/e2e/single_turn.py` | 单轮 4 指标的构建与注册（含自定义指标接入点） |
+| `assertion/e2e/multi_turn_judge.py` | 1.3.5 多轮 G1/G2 门禁 + Q1~Q5 加权评估器 |
+| `assertion/trajectory/state_machine.py` | 1.3.5 会话状态机验证（YAML 矩阵驱动） |
+| `assertion/e2e/deterministic.py` + `assertion/trajectory/intent.py` | 1.3.5 数值一致性（e2e）+ 意图分类（轨迹层）本地断言 |
 | `eval/report.py` | 结果可视化：单轮性能区块 + 多轮雷达图（框架外，纯 Python） |
 | `config.py` | 阈值、超时、角色提示词、批量/缓存/多轮权重等配置 |
 | `results/evaluation_report.html` | 一次真实评测的完整产出样例 |

@@ -1,7 +1,7 @@
 # promptfoo 使用手册（小白入门版）
 
 > 适用版本：promptfoo 0.121.x（2026 年下半年当前版本系列，基于官方文档编写）
-> 说明：promptfoo 已在 `promptfoo_eval/` 落地为**独立的公共评测集评测轨**（GSM8K / C-Eval，见该目录 README；与 DeepEval 链路零代码耦合，模型接入复用同一 Kimi for Coding 端点与凭据）。本手册是独立学习文档，结构与 `deepeval使用手册.md` 平行，便于对照阅读。
+> 说明：promptfoo 已在 `../promptfoo_eval` 落地为 **独立的公共评测集评测轨**（GSM8K / C-Eval，见该目录 README；与 DeepEval 链路零代码耦合，模型接入复用同一 Kimi for Coding 端点与凭据）。本手册是独立学习文档，结构与 `project_notes/deepeval使用手册.md` 平行，便于对照阅读。
 > 背景速览：promptfoo 是 MIT 协议的开源 LLM 评测/红队测试工具，CLI 优先、配置驱动；2026 年 3 月 OpenAI 宣布收购，官方承诺保持开源和模型中立。
 
 > **新手阅读路径建议**（约 1 小时）：
@@ -336,13 +336,15 @@ config:
 # assert_numeric_consistent.py
 # promptfoo 约定：python 断言脚本导出 get_assert(output, context)
 import json, sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../..', '..'))
+
 
 def get_assert(output, context):
     vars_ = (context or {}).get('vars') or {}
     expected = vars_.get('expected_answer', '') or ''
     # 例：检查输出中的数字是否覆盖标准答案中的关键数值
-    from eval.metrics.local_asserts import check_numeric_consistency
+    from assertion.e2e.deterministic import check_numeric_consistency
     result = check_numeric_consistency(expected, output or '')
     passed = bool(result.passed)
     # ⚠️ 返回 dict 时 score 必填（有限数值），否则断言报"必须返回 boolean/number/{pass,score,reason}"
@@ -357,7 +359,7 @@ assert:
 
 > ⚠️ 注意：python 断言的约定是**脚本内定义 `get_assert(output, context)` 函数**（由 promptfoo 内嵌 Python 桥调用），不是"stdin 读 JSON / stdout 写 JSON"——后者是自定义 python provider 的约定，两者不要混淆。
 
-**这是 promptfoo 回应"能力边界 3"（YAML 表达不了复杂逻辑）的官方通道**——本仓库 DeepEval 工程里的数值一致性本地断言（`eval/metrics/local_asserts.py`）迁过来就是这个形态。
+**这是 promptfoo 回应"能力边界 3"（YAML 表达不了复杂逻辑）的官方通道**——本仓库 DeepEval 工程里的数值一致性本地断言（`assertion/e2e/deterministic.py`）迁过来就是这个形态。
 
 ### 4.3 其他扩展点一览
 
@@ -449,7 +451,7 @@ promptfoo 没有 Synthesizer 等价物，但 CSV 格式简单，DeepEval 工程�
 |---|---|
 | 官方文档 `promptfoo.dev/docs` | 配置参考、断言大全、Provider 接入、红队指南（权威来源） |
 | GitHub `promptfoo/promptfoo` | 源码、issue 检索报错、示例配置 |
-| 本仓库 `deepeval使用手册.md` | 对照阅读：同一评测问题的 DeepEval 解法 |
+| 本仓库 `project_notes/deepeval使用手册.md` | 对照阅读：同一评测问题的 DeepEval 解法 |
 | 本仓库 `eval/synthesize_cases.py` | 测试集生成逻辑（产出 CSV 可迁移到 promptfoo） |
 | 本仓库 `README.md` 缓存机制一节 | promptfoo 缓存设计思路在本仓库的落地 |
 

@@ -9,7 +9,7 @@
   - GEval(correctness)      答案正确性（对照标准答案）
 
 新增自定义单轮指标：
-  1. 在 eval/metrics/custom_example.py 参照样例实现（GEval 或 BaseMetric 路线）
+  1. 在 assertion/e2e/custom_example.py 参照样例实现（GEval 或 BaseMetric 路线）
   2. 在本文件 build_metrics() 中按同样模式追加，或注册进 SINGLE_METRIC_REGISTRY
 """
 

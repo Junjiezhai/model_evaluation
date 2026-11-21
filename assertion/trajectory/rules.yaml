@@ -1,0 +1,103 @@
+# -*- coding: utf-8 -*-
+# 轨迹合法性断言规则集（python -m assertion.trajectory 读取）。
+#
+# 设计原则（业界实践）：
+# - 锚定「不变量」而非「规定路径」：断言世界必须满足的条件，避免误杀合法新路径
+# - 能写成确定性规则的不交给 LLM judge（judge 有精度天花板）
+# - severity: critical = 违反即红线（安全/资损），warning = 值得审查
+#
+# 规则字段：
+#   id / description / severity           必填
+#   applies_to                            可选，限定场景名（空=全部 trace）
+#   when                                  可选前置条件；不满足则规则 SKIP（不算违反）
+#     node_name / node_prefix + metadata  树中须存在满足条件的节点
+#   assert                                恰好一种断言：
+#     must_contain_ordered                前序遍历中须按序出现（match: exact|prefix）
+#     must_not_contain                    禁止出现（常与 when 联用做条件禁令）
+#     max_occurrences                     某节点出现次数上限（循环预算）
+#     min_type_count                      某类型观测（如 generation）最少数量
+#     require_metadata                    匹配节点必须带某 metadata 键（可校验值）
+
+version: 1
+
+rules:
+  # ---------- 结构完整性 ----------
+  - id: R-001
+    description: 主图节点完整性：走到路由层（domain_dispatch）前必须经过 context_builder → input_guard → request_classifier
+    severity: critical
+    when:
+      node_name: domain_dispatch
+    assert:
+      must_contain_ordered:
+        names: [context_builder, input_guard, request_classifier]
+        match: exact
+
+  - id: R-002
+    description: 护栏拦截（BLOCK）后禁止执行任何业务动作 —— 安全红线
+    severity: critical
+    applies_to: [guard_intercept, guard_bypass_bug]
+    when:
+      node_name: input_guard
+      metadata: {verdict: BLOCK}
+    assert:
+      must_not_contain:
+        names: ["action."]
+        match: prefix
+
+  # ---------- 资源预算 ----------
+  - id: R-003
+    description: think-action 循环预算：increment_loop 出现次数 ≤ 3（MAX_ACTION_LOOPS）
+    severity: critical
+    assert:
+      max_occurrences:
+        name: increment_loop
+        match: exact
+        max: 3
+
+  # ---------- 决策质量 ----------
+  - id: R-004
+    description: 提额类场景必须至少有一次 LLM generation（决策不能凭空产生）
+    severity: warning
+    applies_to: [normal_limit_increase, max_loop_guard, async_worker]
+    assert:
+      min_type_count:
+        type: generation
+        min: 1
+
+  # ---------- 幂等完整性（对应 agent 四层幂等设计）----------
+  - id: R-005
+    description: 所有 tool 类型观测必须携带 idempotency_key —— 外部写动作可安全重试的前提
+    severity: critical
+    assert:
+      require_metadata:
+        node_type: tool
+        key: idempotency_key
+
+  # ---------- 异步闭环 ----------
+  - id: R-006
+    description: 异步 gate 命中后必须由后台 worker 承接任务（承诺必达）
+    severity: critical
+    applies_to: [async_worker]
+    assert:
+      must_contain_ordered:
+        names: [action_async_gate, "async_task."]
+        match: prefix
+
+  - id: R-007
+    description: 异步任务必须走到子图出口（任务不能悬空）
+    severity: critical
+    applies_to: [async_worker]
+    assert:
+      must_contain:
+        names: [subgraph_output]
+        match: exact
+
+  # ---------- 兜底机制 ----------
+  - id: R-008
+    description: 循环打满场景必须出现 max_loop 兜底节点（强制收尾可视）
+    severity: warning
+    applies_to: [max_loop_guard]
+    assert:
+      must_contain:
+        names: [max_loop]
+        match: exact

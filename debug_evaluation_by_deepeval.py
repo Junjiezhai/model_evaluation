@@ -62,7 +62,7 @@ class DebugConfig:
     intent_llm: bool = False        # True: 多轮意图分类走 LLM（默认本地关键词规则，零成本）
 
     # ---- 单轮指标选择（None = 默认全量 4 指标）----
-    # 逗号分隔的指标名，对应 eval/metrics/single_turn.py 的 SINGLE_METRIC_REGISTRY，如：
+    # 逗号分隔的指标名，对应 assertion/e2e/single_turn.py 的 SINGLE_METRIC_REGISTRY，如：
     # 'faithfulness,correctness'
     single_metrics: Optional[str] = None
 
